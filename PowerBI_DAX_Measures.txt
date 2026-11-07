@@ -1,0 +1,55 @@
+
+-- Create these measures in Power BI after loading the CSV table as 'Palo Alto Networks'
+
+Total Employees = COUNTROWS('Palo Alto Networks')
+
+Attritions = SUM('Palo Alto Networks'[Attrition])
+
+Attrition Rate = DIVIDE([Attritions], [Total Employees], 0)
+
+Average Monthly Income = AVERAGE('Palo Alto Networks'[MonthlyIncome])
+
+Average Years at Company = AVERAGE('Palo Alto Networks'[YearsAtCompany])
+
+Average Years in Current Role = AVERAGE('Palo Alto Networks'[YearsInCurrentRole])
+
+Average Years Since Last Promotion = AVERAGE('Palo Alto Networks'[YearsSinceLastPromotion])
+
+Promotion Gap Employees =
+CALCULATE(
+    [Total Employees],
+    'Palo Alto Networks'[YearsSinceLastPromotion] >= 3
+)
+
+Promotion Gap Attritions =
+CALCULATE(
+    [Attritions],
+    'Palo Alto Networks'[YearsSinceLastPromotion] >= 3
+)
+
+Promotion Gap Attrition Rate =
+DIVIDE([Promotion Gap Attritions], [Promotion Gap Employees], 0)
+
+Overtime Attrition Rate =
+CALCULATE(
+    [Attrition Rate],
+    'Palo Alto Networks'[OverTime] = "Yes"
+)
+
+Non-Overtime Attrition Rate =
+CALCULATE(
+    [Attrition Rate],
+    'Palo Alto Networks'[OverTime] = "No"
+)
+
+Promotion Gap Index =
+[Average Years Since Last Promotion] * [Attrition Rate]
+
+-- Optional calculated column
+Promotion Gap Band =
+SWITCH(
+    TRUE(),
+    'Palo Alto Networks'[YearsSinceLastPromotion] <= 2, "0–2 years",
+    'Palo Alto Networks'[YearsSinceLastPromotion] <= 5, "3–5 years",
+    "6+ years"
+)
