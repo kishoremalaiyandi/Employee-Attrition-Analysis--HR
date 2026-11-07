@@ -1,102 +1,67 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from pathlib import Path
+import matplotlib.pyplot as plt
+from analysis import prepare_data, attrition_summary, attrition_by_category
+from model import train_model, evaluate_model
 
 st.set_page_config(page_title="Employee Attrition Analytics", page_icon="📊", layout="wide")
-st.title("📊 Employee Attrition Analytics")
-st.caption("Interactive HR analytics dashboard • Descriptive analysis, not an individual-level prediction or employment decision tool")
+st.title("Employee Attrition Analytics Dashboard")
+st.caption("Explore employee attrition patterns and evaluate a baseline machine-learning model.")
 
 @st.cache_data
 def load_data():
-    path = Path(__file__).parent / "employee_attrition_data.csv"
-    df = pd.read_csv(path)
-    if "AttritionLabel" not in df.columns:
-        df["AttritionLabel"] = df["Attrition"].map({1: "Yes", 0: "No"})
-    return df
+    return pd.read_csv("data/employee_attrition.csv")
 
-df = load_data()
-with st.sidebar:
-    st.header("Filters")
-    departments = st.multiselect("Department", sorted(df["Department"].dropna().unique()), default=sorted(df["Department"].dropna().unique()))
-    roles = st.multiselect("Job role", sorted(df["JobRole"].dropna().unique()), default=sorted(df["JobRole"].dropna().unique()))
-    overtime = st.multiselect("Overtime", sorted(df["OverTime"].dropna().unique()), default=sorted(df["OverTime"].dropna().unique()))
-    age_min, age_max = int(df["Age"].min()), int(df["Age"].max())
-    age_range = st.slider("Age range", age_min, age_max, (age_min, age_max))
-    show_data = st.checkbox("Show filtered records", value=False)
-
-filtered = df[
-    df["Department"].isin(departments) &
-    df["JobRole"].isin(roles) &
-    df["OverTime"].isin(overtime) &
-    df["Age"].between(age_range[0], age_range[1])
-].copy()
-
-if filtered.empty:
-    st.warning("No records match the selected filters.")
+upload = st.sidebar.file_uploader("Upload another CSV (optional)", type=["csv"])
+try:
+    data = prepare_data(pd.read_csv(upload) if upload else load_data())
+except Exception as e:
+    st.error(f"Dataset error: {e}")
     st.stop()
 
-n = len(filtered)
-leavers = int((filtered["Attrition"] == 1).sum())
-rate = leavers / n * 100
-a, b, c, d = st.columns(4)
-a.metric("Employees in view", f"{n:,}")
-b.metric("Employees marked as left", f"{leavers:,}")
-c.metric("Attrition rate", f"{rate:.1f}%")
-d.metric("Overtime rate", f"{(filtered['OverTime'].eq('Yes').mean()*100):.1f}%")
+s = attrition_summary(data)
+a,b,c,d = st.columns(4)
+a.metric("Employees", f"{s['employees']:,}")
+b.metric("Employees who left", f"{s['attrition_count']:,}")
+c.metric("Attrition rate", f"{s['attrition_rate']:.1%}")
+d.metric("Missing cells", f"{s['missing_cells']:,}")
 
-tab1, tab2, tab3, tab4 = st.tabs(["Overview", "Departments & roles", "Work patterns", "Data & notes"])
-with tab1:
-    left, right = st.columns(2)
-    with left:
-        counts = filtered["AttritionLabel"].value_counts().rename_axis("Attrition").reset_index(name="Employees")
-        st.plotly_chart(px.bar(counts, x="Attrition", y="Employees", color="Attrition", title="Employees by attrition status", text_auto=True), use_container_width=True)
-    with right:
-        age = filtered.groupby("AttritionLabel", as_index=False)["Age"].mean()
-        st.plotly_chart(px.bar(age, x="AttritionLabel", y="Age", title="Average age by attrition status", labels={"AttritionLabel":"Attrition status","Age":"Average age"}, text_auto=".1f"), use_container_width=True)
-    tenure = filtered.groupby("AttritionLabel", as_index=False)["YearsAtCompany"].mean()
-    st.plotly_chart(px.bar(tenure, x="AttritionLabel", y="YearsAtCompany", title="Average years at company by attrition status", labels={"AttritionLabel":"Attrition status","YearsAtCompany":"Average years"}, text_auto=".1f"), use_container_width=True)
+st.subheader("Employee outcomes")
+counts = data["Attrition"].map({0:"Stayed",1:"Left"}).value_counts()
+fig, ax = plt.subplots()
+ax.bar(counts.index, counts.values)
+ax.set_ylabel("Employees")
+st.pyplot(fig)
+plt.close(fig)
 
-with tab2:
-    dep = filtered.groupby("Department", as_index=False).agg(Employees=("Attrition","size"), Leavers=("Attrition","sum"))
-    dep["Attrition rate (%)"] = dep["Leavers"] / dep["Employees"] * 100
-    role = filtered.groupby("JobRole", as_index=False).agg(Employees=("Attrition","size"), Leavers=("Attrition","sum"))
-    role["Attrition rate (%)"] = role["Leavers"] / role["Employees"] * 100
-    left, right = st.columns(2)
-    with left:
-        st.plotly_chart(px.bar(dep.sort_values("Attrition rate (%)", ascending=False), x="Department", y="Attrition rate (%)", hover_data=["Employees","Leavers"], title="Attrition rate by department", text_auto=".1f"), use_container_width=True)
-        st.dataframe(dep.sort_values("Attrition rate (%)", ascending=False).style.format({"Attrition rate (%)":"{:.1f}%"}), use_container_width=True, hide_index=True)
-    with right:
-        st.plotly_chart(px.bar(role.sort_values("Attrition rate (%)", ascending=False), x="Attrition rate (%)", y="JobRole", orientation="h", hover_data=["Employees","Leavers"], title="Attrition rate by job role", text_auto=".1f"), use_container_width=True)
-        st.dataframe(role.sort_values("Attrition rate (%)", ascending=False).style.format({"Attrition rate (%)":"{:.1f}%"}), use_container_width=True, hide_index=True)
+categories = [x for x in ["Department","JobRole","BusinessTravel","MaritalStatus","OverTime","EducationField"] if x in data.columns]
+if categories:
+    choice = st.selectbox("Attrition rate by category", categories)
+    rates = attrition_by_category(data, choice).rename("Attrition rate")
+    st.dataframe(rates.to_frame().style.format("{:.1%}"), use_container_width=True)
 
-with tab3:
-    overtime_table = filtered.groupby("OverTime", as_index=False).agg(Employees=("Attrition","size"), Leavers=("Attrition","sum"))
-    overtime_table["Attrition rate (%)"] = overtime_table["Leavers"] / overtime_table["Employees"] * 100
-    left, right = st.columns(2)
-    with left:
-        st.plotly_chart(px.bar(overtime_table, x="OverTime", y="Attrition rate (%)", title="Attrition rate by overtime status", text_auto=".1f", hover_data=["Employees","Leavers"]), use_container_width=True)
-        st.dataframe(overtime_table.style.format({"Attrition rate (%)":"{:.1f}%"}), use_container_width=True, hide_index=True)
-    with right:
-        satisfaction = filtered.groupby("JobSatisfaction", as_index=False).agg(Employees=("Attrition","size"), Leavers=("Attrition","sum"))
-        satisfaction["Attrition rate (%)"] = satisfaction["Leavers"] / satisfaction["Employees"] * 100
-        st.plotly_chart(px.line(satisfaction, x="JobSatisfaction", y="Attrition rate (%)", markers=True, title="Attrition rate by job satisfaction score", hover_data=["Employees","Leavers"]), use_container_width=True)
-    st.info("These are descriptive associations in the supplied dataset. They do not establish that overtime, satisfaction, or role caused an employee to leave.")
+numeric = [x for x in ["Age","MonthlyIncome","TotalWorkingYears","YearsAtCompany","DistanceFromHome"] if x in data.columns]
+if numeric:
+    choice = st.selectbox("Compare numeric characteristic", numeric)
+    fig, ax = plt.subplots()
+    for label, value in [("Stayed",0),("Left",1)]:
+        ax.hist(data.loc[data.Attrition==value, choice].dropna(), bins=20, alpha=.55, label=label)
+    ax.set_xlabel(choice); ax.set_ylabel("Employees"); ax.legend()
+    st.pyplot(fig); plt.close(fig)
 
-with tab4:
-    st.markdown("""
-    **Dataset:** Employee-level HR table supplied with this project (1,470 records, 32 columns).
-
-    **Target:** `Attrition` (`1` = Yes/left, `0` = No/stayed); `AttritionLabel` is a readable label.
-
-    **How rates are calculated:** number of records marked as attrition divided by all records in the selected group, multiplied by 100.
-
-    **Limitations:** this is a historical dataset; categories may not generalize to another organization or time period. Missing values, collection practices, class imbalance, and possible proxy variables can affect interpretation. Use aggregated results to support human review, not to rank, discipline, or make automated employment decisions.
-    """)
-    st.download_button("Download filtered CSV", filtered.to_csv(index=False).encode("utf-8"), "filtered_employee_attrition.csv", "text/csv")
-    st.download_button("Download complete dataset", df.to_csv(index=False).encode("utf-8"), "employee_attrition_data.csv", "text/csv")
-    if show_data:
-        st.dataframe(filtered, use_container_width=True, hide_index=True)
-
-st.divider()
-st.caption("Project demo • Verify data definitions and privacy permissions before using with real employee records.")
+st.subheader("Machine-learning evaluation")
+st.write("Train a Random Forest classifier using a stratified 80/20 holdout split.")
+if st.button("Train and evaluate model"):
+    with st.spinner("Training..."):
+        model, X_test, y_test = train_model(data)
+        metrics, report, matrix = evaluate_model(model, X_test, y_test)
+    x,y,z = st.columns(3)
+    x.metric("Accuracy", f"{metrics['accuracy']:.1%}")
+    y.metric("Precision", f"{metrics['precision']:.1%}")
+    z.metric("Recall", f"{metrics['recall']:.1%}")
+    st.text("Classification report"); st.code(report)
+    st.write("Confusion matrix (actual rows × predicted columns)")
+    st.dataframe(pd.DataFrame(matrix, index=["Actual stayed","Actual left"],
+                              columns=["Predicted stayed","Predicted left"]))
+    st.warning("Use predictions only as exploratory decision support. Check fairness and validate on new data before real-world use.")
+st.sidebar.caption("Python • Pandas • Scikit-learn • Streamlit")
